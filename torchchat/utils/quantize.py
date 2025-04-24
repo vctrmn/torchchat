@@ -65,6 +65,7 @@ torchao_experimental_load_error: Optional[Exception] = None
 
 import inspect
 
+
 def get_named_parameters(func: Callable) -> List[str]:
     # Get the signature of the function
     signature = inspect.signature(func)
@@ -74,15 +75,22 @@ def get_named_parameters(func: Callable) -> List[str]:
 
     # Filter and return named parameters
     named_params = [
-        name for name, param in parameters.items()
-        if param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        name
+        for name, param in parameters.items()
+        if param.kind
+        in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
     ]
     return named_params
 
-def validate_args(named_params: List[str], q_kwargs: Dict[str, Any], quantizer: Optional[str] = None) -> Dict[str, Any]:
+
+def validate_args(
+    named_params: List[str], q_kwargs: Dict[str, Any], quantizer: Optional[str] = None
+) -> Dict[str, Any]:
     for key in list(q_kwargs.keys()):
         if key not in named_params:
-            print(f"Specification for quantizer {quantizer} has extraneous key {key}. Ignoring.")
+            print(
+                f"Specification for quantizer {quantizer} has extraneous key {key}. Ignoring."
+            )
             del q_kwargs[key]
     return q_kwargs
 
@@ -116,15 +124,26 @@ def quantize_model(
             raise RuntimeError(f"unknown quantizer {quantizer} specified")
         else:
             # Use tensor subclass API for int4 weight only.
-            if (device in ["cuda", "xpu", "npu"]) and quantizer == "linear:int4":
-                quantize_(model, int4_weight_only(q_kwargs["groupsize"]))
+            if quantizer == "linear:int4":
+                # Handle CPU differently if needed
+                if device in ["cpu"]:
+                    quantize_(
+                        model,
+                        int4_weight_only(
+                            q_kwargs["groupsize"], scheme=q_kwargs.get("scheme", None)
+                        ),
+                    )
+                elif device in ["cuda", "xpu", "npu"]:
+                    quantize_(model, int4_weight_only(q_kwargs["groupsize"]))
                 if not support_tensor_subclass:
                     unwrap_tensor_subclass(model)
                 continue
 
             if quantizer == "linear:a8wxdq":
                 if get_precision() != torch.float32:
-                    print(f"Quantizer {quantizer} requires float32 inputs, but received {get_precision()}.  Changing dtype to float32.  Note that after quantization, the weights will be lowbit integers, not float32.")
+                    print(
+                        f"Quantizer {quantizer} requires float32 inputs, but received {get_precision()}.  Changing dtype to float32.  Note that after quantization, the weights will be lowbit integers, not float32."
+                    )
                     set_precision(torch.float32)
 
                 group_size = q_kwargs["groupsize"]
@@ -169,7 +188,9 @@ def quantize_model(
                 # These quantizers require float32 input weights.  Note that after quantization,
                 # the weights will no longer be float32, but lowbit integers
                 if get_precision() != torch.float32:
-                    print(f"Quantizer {quantizer} requires float32 inputs, but received {get_precision()}.  Changing dtype to float32.  Note that after quantization, the weights will be lowbit integers, not float32.")
+                    print(
+                        f"Quantizer {quantizer} requires float32 inputs, but received {get_precision()}.  Changing dtype to float32.  Note that after quantization, the weights will be lowbit integers, not float32."
+                    )
                     set_precision(torch.float32)
 
                 group_size = q_kwargs["groupsize"]
@@ -189,7 +210,9 @@ def quantize_model(
                 del q_kwargs["bitwidth"]
 
             if quantizer == "linear:afpwx" and device != "mps":
-                raise RuntimeError("linear:afpwx quantization can only run on mps device!")
+                raise RuntimeError(
+                    "linear:afpwx quantization can only run on mps device!"
+                )
 
             # We set global precision from quantize options if it is specified at cli.py:485
             # so the precision returned by get_precision() is always the authoritative precision/dtype in torchchat
@@ -211,14 +234,19 @@ def quantize_model(
             model = quant_handler.quantize(model)
 
 
-
 #########################################################################
 ###                QuantHandler API definition                        ###
 ###               (unify with torchao in future)                      ###
 
 
 class QuantHandler:
-    def __init__(self, model: Optional[nn.Module] = None, device="cpu", precision=None, tokenizer=None):
+    def __init__(
+        self,
+        model: Optional[nn.Module] = None,
+        device="cpu",
+        precision=None,
+        tokenizer=None,
+    ):
         self.model_ = model
         self.device = device
         self.tokenizer = tokenizer
@@ -246,7 +274,15 @@ class QuantHandler:
 
 
 class PrecisionHandler(QuantHandler):
-    def __init__(self, model: Optional[nn.Module]=None, device="cpu", precision=None, tokenizer=None, *, dtype):
+    def __init__(
+        self,
+        model: Optional[nn.Module] = None,
+        device="cpu",
+        precision=None,
+        tokenizer=None,
+        *,
+        dtype,
+    ):
         self.model_ = model
         self.device = device
         self.tokenizer = tokenizer
@@ -275,7 +311,15 @@ class PrecisionHandler(QuantHandler):
 
 
 class ExecutorHandler(QuantHandler):
-    def __init__(self, model: Optional[nn.Module]=None, device="cpu", precision=None, tokenizer=None, *, accelerator):
+    def __init__(
+        self,
+        model: Optional[nn.Module] = None,
+        device="cpu",
+        precision=None,
+        tokenizer=None,
+        *,
+        accelerator,
+    ):
         self.model_ = model
 
         if isinstance(accelerator, str):
@@ -337,18 +381,18 @@ def dynamically_quantize_per_channel(
         items = x_shape_1
     elif ((x_shape_1 % groupsize) == 0) or not enable_non_multiple_groups:
         assert groupsize > 0, "group size must be positive"
-        assert (
-            x_shape_1 % groupsize
-        ) == 0, f"weights dimension 1 = {x_shape_1} must be a multiple of group size {groupsize}"
+        assert (x_shape_1 % groupsize) == 0, (
+            f"weights dimension 1 = {x_shape_1} must be a multiple of group size {groupsize}"
+        )
         items = groupsize
     else:
         assert groupsize > 0, "group size must be positive"
         print(
             f"row-size of weight matrix {x_shape_1} is not divisible by group size {groupsize}, using nearest neighbor rounding"
         )
-        assert (
-            x_shape_1 % groupsize != 0
-        ), f"expected x.shape[1] to not be a multiple of group size {groupsize}, but got {x_shape_1}"
+        assert x_shape_1 % groupsize != 0, (
+            f"expected x.shape[1] to not be a multiple of group size {groupsize}, but got {x_shape_1}"
+        )
         padding = groupsize - (x_shape_1 % groupsize)
         x = F.pad(x, (0, padding))
         items = groupsize
@@ -629,9 +673,9 @@ class WeightOnlyInt8Linear(nn.Module):
         self.in_features = in_features
         self.out_features = out_features
 
-        assert (weight is None) == bool(
-            scales is None
-        ), "must specify both weights and scales, or neither"
+        assert (weight is None) == bool(scales is None), (
+            "must specify both weights and scales, or neither"
+        )
         if weight is None:
             weight = torch.empty(
                 (out_features, in_features),
@@ -663,7 +707,7 @@ class WeightOnlyInt8QuantHandler(QuantHandler):
     def __init__(
         self,
         model: Optional[nn.Module] = None,
-        device = None,
+        device=None,
         precision=None,
         tokenizer=None,
         *,
@@ -767,9 +811,9 @@ class QuantizedEmbedding(torch.nn.Module):
         self.dtype = dtype
         self.bitwidth = bitwidth
 
-        assert (weight is None) == bool(
-            scales is None
-        ), "must specify both weights and scales, or neither"
+        assert (weight is None) == bool(scales is None), (
+            "must specify both weights and scales, or neither"
+        )
 
         if bitwidth not in [4, 8]:
             raise RuntimeError(
@@ -961,7 +1005,7 @@ quantizer_class_dict = {
     "precision": PrecisionHandler,
     "executor": ExecutorHandler,
     "linear:int4": Int4WeightOnlyQuantizer,
-    "linear:a8wxdq": None, # uses quantize_ API
+    "linear:a8wxdq": None,  # uses quantize_ API
     "linear:a8w4dq": Int8DynActInt4WeightQuantizer,
 }
 
@@ -985,6 +1029,7 @@ try:
         torchao_experimental_quant_api
     )
     from torchao_experimental_quant_api import UIntxWeightOnlyLinearQuantizer
+
     quantizer_class_dict["linear:afpwx"] = UIntxWeightOnlyLinearQuantizer
 
     # Try loading custom op
